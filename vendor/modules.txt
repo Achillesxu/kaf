@@ -57,6 +57,8 @@ github.com/eapache/go-xerial-snappy
 github.com/eapache/queue
 # github.com/fatih/color v1.7.0
 github.com/fatih/color
+# github.com/go-zookeeper/zk v1.0.2
+github.com/go-zookeeper/zk
 # github.com/golang/lint v0.0.0-20181026193005-c67002cb31c3
 github.com/golang/lint/golint
 # github.com/golang/protobuf v1.3.2
@@ -168,7 +170,7 @@ github.com/segmentio/kafka-go/protocol/produce
 github.com/segmentio/kafka-go/protocol/saslauthenticate
 github.com/segmentio/kafka-go/protocol/saslhandshake
 github.com/segmentio/kafka-go/sasl
-# github.com/spf13/cobra v1.1.1
+# github.com/spf13/cobra v1.1.2-0.20201229145732-a4ab3fa09e3d
 github.com/spf13/cobra
 # github.com/spf13/pflag v1.0.5
 github.com/spf13/pflag
@@ -217,6 +219,10 @@ golang.org/x/net/context
 golang.org/x/net/context/ctxhttp
 golang.org/x/net/internal/socks
 golang.org/x/net/proxy
+# golang.org/x/oauth2 v0.0.0-20190604053449-0f29369cfe45
+golang.org/x/oauth2
+golang.org/x/oauth2/clientcredentials
+golang.org/x/oauth2/internal
 # golang.org/x/sync v0.0.0-20200317015054-43a5402ce75a
 golang.org/x/sync/errgroup
 # golang.org/x/sys v0.0.0-20200323222414-85ca7c5b95cd
@@ -229,6 +235,14 @@ golang.org/x/text/unicode/norm
 golang.org/x/tools/go/ast/astutil
 golang.org/x/tools/go/gcexportdata
 golang.org/x/tools/go/internal/gcimporter
+# google.golang.org/appengine v1.6.1
+google.golang.org/appengine/internal
+google.golang.org/appengine/internal/base
+google.golang.org/appengine/internal/datastore
+google.golang.org/appengine/internal/log
+google.golang.org/appengine/internal/remote_api
+google.golang.org/appengine/internal/urlfetch
+google.golang.org/appengine/urlfetch
 # google.golang.org/genproto v0.0.0-20191108220845-16a3f7862a1a
 google.golang.org/genproto/protobuf/api
 google.golang.org/genproto/protobuf/field_mask

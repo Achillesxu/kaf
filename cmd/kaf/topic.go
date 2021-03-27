@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"path"
 	"sort"
+	"strconv"
 	"text/tabwriter"
+	"time"
 
 	"strings"
 
@@ -19,7 +22,22 @@ var (
 	replicasFlag             int16
 	noHeaderFlag             bool
 	compactFlag              bool
+	zookeepersFlag           []string
+	rootPathFlag             string
 )
+
+type PartitionState struct {
+	ControllerEpoch int   `json:"controller_epoch"`
+	Leader          int   `json:"leader"`
+	Version         int   `json:"version"`
+	LeaderEpoch     int   `json:"leader_epoch"`
+	Isr             []int `json:"isr"`
+}
+
+type TopicInfo struct {
+	Name     string
+	ParState []PartitionState
+}
 
 func init() {
 	rootCmd.AddCommand(topicCmd)
@@ -37,7 +55,16 @@ func init() {
 	createTopicCmd.Flags().BoolVar(&compactFlag, "compact", false, "Enable topic compaction")
 
 	lsTopicsCmd.Flags().BoolVar(&noHeaderFlag, "no-headers", false, "Hide table headers")
+	lsTopicsCmd.Flags().StringSliceVarP(&zookeepersFlag, "zookeepers", "z", nil, "Comma separated list of zookeeper server ip:port pairs")
+	lsTopicsCmd.Flags().StringVar(&rootPathFlag, "root-path", "/", "kafka root path in zookeeper")
+
 	topicsCmd.Flags().BoolVar(&noHeaderFlag, "no-headers", false, "Hide table headers")
+	topicsCmd.Flags().StringSliceVarP(&zookeepersFlag, "zookeepers", "z", nil, "Comma separated list of zookeeper server ip:port pairs")
+	topicsCmd.Flags().StringVar(&rootPathFlag, "root-path", "/", "kafka root path in zookeeper")
+
+	describeTopicCmd.Flags().StringSliceVarP(&zookeepersFlag, "zookeepers", "z", nil, "Comma separated list of zookeeper server ip:port pairs")
+	describeTopicCmd.Flags().StringVar(&rootPathFlag, "root-path", "/", "kafka root path in zookeeper")
+
 	updateTopicCmd.Flags().Int32VarP(&partitionsFlag, "partitions", "p", int32(-1), "Number of partitions")
 	updateTopicCmd.Flags().StringVar(&partitionAssignmentsFlag, "partition-assignments", "", "Partition Assignments. Optional. If set in combination with -p, an assignment must be provided for each new partition. Example: '[[1,2,3],[1,2,3]]' (JSON Array syntax) assigns two new partitions to brokers 1,2,3. If used by itself, a reassignment must be provided for all partitions.")
 }
@@ -131,38 +158,114 @@ var lsTopicsCmd = &cobra.Command{
 	Short:   "List topics",
 	Args:    cobra.ExactArgs(0),
 	Run: func(cmd *cobra.Command, args []string) {
-		admin := getClusterAdmin()
-
-		topics, err := admin.ListTopics()
-		if err != nil {
-			errorExit("Unable to list topics: %v\n", err)
-		}
-
-		sortedTopics := make(
-			[]struct {
-				name string
-				sarama.TopicDetail
-			}, len(topics))
-
-		i := 0
-		for name, topic := range topics {
-			sortedTopics[i].name = name
-			sortedTopics[i].TopicDetail = topic
-			i++
-		}
-
-		sort.Slice(sortedTopics, func(i int, j int) bool {
-			return sortedTopics[i].name < sortedTopics[j].name
-		})
 
 		w := tabwriter.NewWriter(outWriter, tabwriterMinWidth, tabwriterWidth, tabwriterPadding, tabwriterPadChar, tabwriterFlags)
 
-		if !noHeaderFlag {
-			fmt.Fprintf(w, "NAME\tPARTITIONS\tREPLICAS\t\n")
-		}
+		if len(zookeepersFlag) > 0 {
 
-		for _, topic := range sortedTopics {
-			fmt.Fprintf(w, "%v\t%v\t%v\t\n", topic.name, topic.NumPartitions, topic.ReplicationFactor)
+			zc := NewZkConfig(zookeepersFlag, rootPathFlag, time.Duration(3)*time.Second, verbose)
+			err := zc.Connect()
+			if err != nil {
+				errorExit("Unable to connect zookeeper ensemble %v to get topics: %v\n", zookeepersFlag, err)
+			}
+			rootChildren, err := zc.LsDir(rootPathFlag)
+			if err != nil {
+				errorExit("Unable to ls %s in zookeeper ensemble %v: %v\n", rootPathFlag, zookeepersFlag, err)
+			}
+			isRightRootPath := false
+			for _, dir := range rootChildren {
+				if dir == "brokers" {
+					isRightRootPath = true
+				}
+			}
+			if isRightRootPath {
+				topicPath := path.Join(rootPathFlag, "brokers", "topics")
+				topicChildren, err := zc.LsDir(topicPath)
+				if err != nil {
+					errorExit("Unable to ls %s in zookeeper ensemble %v: %v\n", topicPath, zookeepersFlag, err)
+				}
+
+				topics := make([]TopicInfo, len(topicChildren))
+
+				for idx, tName := range topicChildren {
+					partitionPath := path.Join(rootPathFlag, "brokers", "topics", tName, "partitions")
+					partitionChildren, err := zc.LsDir(partitionPath)
+
+					if err != nil {
+						errorExit("Unable to ls %s in zookeeper ensemble %v: %v\n", partitionChildren, zookeepersFlag, err)
+					}
+
+					sort.Slice(partitionChildren, func(i int, j int) bool {
+						iInt, _ := strconv.Atoi(partitionChildren[i])
+						jInt, _ := strconv.Atoi(partitionChildren[j])
+						return iInt < jInt
+					})
+
+					for _, num := range partitionChildren {
+						partitionNumStatePath := path.Join(rootPathFlag, "brokers", "topics", tName, "partitions", num, "state")
+
+						stateData, err := zc.GetData(partitionNumStatePath)
+
+						if err != nil {
+							errorExit("Unable to get %s of %s in zookeeper ensemble %v: %v\n", stateData, partitionNumStatePath, zookeepersFlag, err)
+						}
+						var state PartitionState
+						err = json.Unmarshal(stateData, &state)
+						if err != nil {
+							errorExit("Unable to decode %s of %s zookeeper ensemble %v: %v\n", string(stateData), partitionNumStatePath, zookeepersFlag, err)
+						}
+						topics[idx].Name = tName
+						topics[idx].ParState = append(topics[idx].ParState, state)
+					}
+				}
+				if len(topics) > 0 {
+					if !noHeaderFlag {
+						_, _ = fmt.Fprintf(w, "NAME\tPARTITIONS\tLEADER\tISR\t\n")
+					}
+					sort.Slice(topics, func(i int, j int) bool {
+						return strings.ToLower(topics[i].Name) < strings.ToLower(topics[j].Name)
+					})
+					for _, topic := range topics {
+						for idx, par := range topic.ParState {
+							_, _ = fmt.Fprintf(w, "%v\t%v\t%v\t%v\t\n", topic.Name, idx, par.Leader, par.Isr)
+						}
+					}
+				}
+			} else {
+				errorExit("Unable to %s in zookeeper ensemble %v\n", rootPathFlag, zookeepersFlag)
+			}
+		} else {
+			admin := getClusterAdmin()
+
+			topics, err := admin.ListTopics()
+			if err != nil {
+				errorExit("Unable to list topics: %v\n", err)
+			}
+
+			sortedTopics := make(
+				[]struct {
+					name string
+					sarama.TopicDetail
+				}, len(topics))
+
+			i := 0
+			for name, topic := range topics {
+				sortedTopics[i].name = name
+				sortedTopics[i].TopicDetail = topic
+				i++
+			}
+
+			sort.Slice(sortedTopics, func(i int, j int) bool {
+				return sortedTopics[i].name < sortedTopics[j].name
+			})
+
+			if !noHeaderFlag {
+				fmt.Fprintf(w, "NAME\tPARTITIONS\tREPLICAS\t\n")
+			}
+
+			for _, topic := range sortedTopics {
+				fmt.Fprintf(w, "%v\t%v\t%v\t\n", topic.name, topic.NumPartitions, topic.ReplicationFactor)
+			}
 		}
 		w.Flush()
 	},
